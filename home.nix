@@ -107,6 +107,13 @@ in
   programs.starship = {
     enable = true;
     enableZshIntegration = false;
+    settings = fromTOML (
+      builtins.readFile (
+        pkgs.runCommand "starship-bracketed.toml" { } ''
+          ${pkgs.starship}/bin/starship preset bracketed-segments -o $out
+        ''
+      )
+    );
   };
 
   programs.direnv = {
