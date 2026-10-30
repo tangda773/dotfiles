@@ -36,7 +36,7 @@ in
   home.packages = with pkgs; [
     alacritty-x11
     nerd-fonts.jetbrains-mono
-    noto-fonts-cjk-sans
+    noto-fonts
 
     ripgrep
     fd
@@ -55,6 +55,20 @@ in
     inputs.tuios.packages.${pkgs.stdenv.hostPlatform.system}.default
     claude-code
   ];
+
+  xdg.configFile."fontconfig/conf.d/60-symbols-fallback.conf".text = ''
+    <?xml version="1.0"?>
+    <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+    <fontconfig>
+      <alias>
+        <family>JetBrainsMono Nerd Font Mono</family>
+        <prefer>
+          <family>JetBrainsMono Nerd Font Mono</family>
+          <family>Noto Sans Symbols 2</family>
+        </prefer>
+      </alias>
+    </fontconfig>
+  '';
 
   xdg.dataFile."applications/Alacritty.desktop".text = ''
     [Desktop Entry]
@@ -86,7 +100,7 @@ in
 
       font = {
         size = 14;
-        normal.family = "JetBrainsMono Nerd Font";
+        normal.family = "JetBrainsMono Nerd Font Mono";
       };
 
       terminal.shell = {
