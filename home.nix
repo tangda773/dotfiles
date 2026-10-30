@@ -38,6 +38,7 @@ in
     nerd-fonts.jetbrains-mono
     noto-fonts
 
+    xclip
     ripgrep
     fd
     jq
