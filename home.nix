@@ -31,6 +31,8 @@ in
 
   fonts.fontconfig.enable = true;
 
+  nixpkgs.config.allowUnfreePredicate = pkg: builtins.elem (pkgs.lib.getName pkg) [ "claude-code" ];
+
   home.packages = with pkgs; [
     alacritty-x11
     nerd-fonts.jetbrains-mono
@@ -51,6 +53,7 @@ in
     pnpm
 
     inputs.tuios.packages.${pkgs.stdenv.hostPlatform.system}.default
+    claude-code
   ];
 
   xdg.dataFile."applications/Alacritty.desktop".text = ''
