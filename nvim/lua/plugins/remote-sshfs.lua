@@ -1,0 +1,50 @@
+return {
+  "nosduco/remote-sshfs.nvim",
+  dependencies = { "ibhagwan/fzf-lua", "nvim-lua/plenary.nvim" },
+  opts = {
+    -- Refer to the configuration section below
+    -- or leave empty for defaults
+    mounts = {
+      ssh_options = {
+        "cache=yes",
+        "kernel_cache",
+        "compression=no",
+        "Ciphers=aes128-gcm@openssh.com",
+        "cache_timeout=115",
+      },
+    },
+    ui = { picker = "fzf-lua" },
+  },
+  config = function(_, opts)
+    require("remote-sshfs").setup(opts)
+  end,
+  keys = {
+    { '<leader>rc', function() require("remote-sshfs.api").connect() end,    desc = "[Remote] Connect" },
+    { '<leader>rd', function() require("remote-sshfs.api").disconnect() end, desc = "[Remote] Disconnect" },
+    { '<leader>re', function() require("remote-sshfs.api").edit() end,       desc = "[Remote] Edit" },
+    {
+      '<leader>ff',
+      function()
+        local c = require("remote-sshfs.connections")
+        if c.is_connected() then
+          require("remote-sshfs.api").find_files()
+        else
+          require("fzf-lua").files()
+        end
+      end,
+      desc = "[Find] Find files"
+    },
+    {
+      '<leader>fg',
+      function()
+        local c = require("remote-sshfs.connections")
+        if c.is_connected() then
+          require("remote-sshfs.api").live_grep()
+        else
+          require("fzf-lua").live_grep()
+        end
+      end,
+      desc = "[Find] Live grep"
+    },
+  },
+}
