@@ -13,6 +13,12 @@ let
     unset WAYLAND_DISPLAY
     exec /usr/bin/alacritty "$@"
   '';
+  tuios = inputs.tuios.packages.${pkgs.stdenv.hostPlatform.system}.default;
+  tuios-completions = pkgs.runCommand "tuios-completions" { } ''
+    export HOME=$TMPDIR
+    mkdir -p $out/share/zsh/site-functions
+    ${tuios}/bin/tuios completion zsh > $out/share/zsh/site-functions/_tuios
+  '';
 in
 {
   home.username = "kuangtatang";
@@ -38,6 +44,7 @@ in
     alacritty-x11
     nerd-fonts.jetbrains-mono
     noto-fonts
+    noto-fonts-cjk-sans
 
     xclip
     ripgrep
@@ -56,7 +63,8 @@ in
     go
     rustup
 
-    inputs.tuios.packages.${pkgs.stdenv.hostPlatform.system}.default
+    tuios
+    tuios-completions
     claude-code
   ];
 
@@ -68,6 +76,7 @@ in
         <family>JetBrainsMono Nerd Font Mono</family>
         <prefer>
           <family>JetBrainsMono Nerd Font Mono</family>
+          <family>Noto Sans Mono CJK TC</family>
           <family>Noto Sans Symbols 2</family>
         </prefer>
       </alias>
