@@ -52,6 +52,8 @@ in
 
     nodejs_22
     pnpm
+    go
+    rustup
 
     inputs.tuios.packages.${pkgs.stdenv.hostPlatform.system}.default
     claude-code
