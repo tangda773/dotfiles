@@ -205,11 +205,11 @@
         "treefmt-nix": "treefmt-nix"
       },
       "locked": {
-        "lastModified": 1793337068,
-        "narHash": "sha256-oNiv+l8w7/TTjU+wdB3I/Vj1iJ/nYEAeRUtOwjLILRE=",
+        "lastModified": 1793572901,
+        "narHash": "sha256-sJYntVjExwOzxGVvKgH04PPPZODXw8o6dLXkG5K7yiY=",
         "owner": "Gaurav-Gosain",
         "repo": "tuios",
-        "rev": "28b2203ff203f034c0cfb09a29865d6b4b693d1b",
+        "rev": "8e08c8d0dc14c6d6126fa2fb11fe95f6bb57ed48",
         "type": "github"
       },
       "original": {
