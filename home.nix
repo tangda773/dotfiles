@@ -21,6 +21,7 @@ let
   '';
 in
 {
+  imports = [ ./claude.nix ];
   home.username = "kuangtatang";
   home.homeDirectory = "/home/kuangtatang";
   home.stateVersion = "26.05";
@@ -65,7 +66,6 @@ in
 
     tuios
     tuios-completions
-    claude-code
   ];
 
   xdg.configFile."fontconfig/conf.d/60-symbols-fallback.conf".text = ''

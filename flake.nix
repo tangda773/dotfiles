@@ -12,6 +12,10 @@
       url = "github:Gaurav-Gosain/tuios";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    fff = {
+      url = "github:dmtrKovalenko/fff";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
