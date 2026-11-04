@@ -1,8 +1,59 @@
+-- 全域只綁 n 模式；t 模式只綁在 Snacks 終端機 buffer，避免攔截 fzf-lua 等其他終端機 buffer 的按鍵
+-- Snacks 的終端機 id 不含 position，用 env 讓每個位置各自獨立
+local function toggle_terminal(win)
+  return function()
+    local current = vim.b.snacks_terminal
+    -- t 模式無法輸入數字前綴，v:count 只會殘留上一個 normal 指令的值
+    local count = vim.api.nvim_get_mode().mode == "t" and 0 or vim.v.count
+    -- 沒有數字前綴且已在同位置的終端機裡時，切換目前這個，而不是 1 號
+    local same = count == 0 and current and current.env and current.env.SNACKS_TERM_POS == win.position
+    Snacks.terminal.toggle(nil, {
+      cwd = same and current.cwd or vim.uv.cwd(),
+      count = same and current.id or math.max(count, 1),
+      env = { SNACKS_TERM_POS = win.position },
+      win = win,
+    })
+  end
+end
+
+local terminal_keys = {
+  term_bottom = {
+    "<C-t>",
+    toggle_terminal({ position = "bottom", height = 0.25 }),
+    desc = "[Terminal] Bottom (數字前綴開多個，如 2<C-t>)"
+  },
+  term_right = {
+    "<C-v>",
+    toggle_terminal({ position = "right", width = 0.33 }),
+    desc = "[Terminal] Right (數字前綴開多個，如 2<C-v>)"
+  },
+  term_float = {
+    "<C-g>",
+    toggle_terminal({ position = "float", border = "rounded" }),
+    desc = "[Terminal] Float (數字前綴開多個，如 2<C-g>)"
+  },
+  term_tab = {
+    "<C-y>",
+    function()
+      vim.cmd("tabnew")
+      Snacks.terminal.open(nil, { cwd = vim.uv.cwd(), win = { position = "current" } })
+    end,
+    desc = "[Terminal] New tab (數字前綴開多個，如 2<C-y>)"
+  },
+}
+
 return {
   "folke/snacks.nvim",
   priority = 1000,
   lazy     = false,
   opts     = {
+    styles       = {
+      terminal = {
+        keys = vim.tbl_map(function(key)
+          return vim.tbl_extend("force", key, { mode = "t" })
+        end, terminal_keys),
+      },
+    },
     -- ── 填補你目前的空缺 ──────────────────────
     input        = { enabled = true },                 -- vim.ui.input
     notifier     = { enabled = true, timeout = 3000 }, -- nvim-notify
@@ -107,7 +158,7 @@ return {
     }
     require("snacks").setup(opts)
   end,
-  keys     = {
+  keys     = vim.list_extend({
     -- words 跳轉
     { "]]",         function() Snacks.words.jump(1) end,              desc = "Next word occurrence" },
     { "[[",         function() Snacks.words.jump(-1) end,             desc = "Prev word occurrence" },
@@ -123,39 +174,5 @@ return {
     { "<leader>pp", function() Snacks.toggle.profiler():toggle() end, desc = "[Profiler] Toggle", },
     { "<leader>ps", function() Snacks.profiler.scratch() end,         desc = "[Profiler] Scratch", },
 
-    -- Terminal
-    {
-      "<C-t>",
-      function()
-        Snacks.terminal.toggle(nil, { cwd = vim.uv.cwd(), win = { position = "bottom", height = 0.25 } })
-      end,
-      mode = { "n", "t" },
-      desc = "[Terminal] Bottom (數字前綴開多個，如 2<C-t>)"
-    },
-    {
-      "<C-v>",
-      function()
-        Snacks.terminal.toggle(nil, { cwd = vim.uv.cwd(), win = { position = "right", width = 0.33 } })
-      end,
-      mode = { "n", "t" },
-      desc = "[Terminal] Right (數字前綴開多個，如 2<C-v>)"
-    },
-    {
-      "<C-g>",
-      function()
-        Snacks.terminal.toggle(nil, { cwd = vim.uv.cwd(), win = { position = "float", border = "rounded" } })
-      end,
-      mode = { "n", "t" },
-      desc = "[Terminal] Float (數字前綴開多個，如 2<C-g>)"
-    },
-    {
-      "<C-y>",
-      function()
-        vim.cmd("tabnew")
-        Snacks.terminal.open(nil, { cwd = vim.uv.cwd(), win = { position = "current" } })
-      end,
-      mode = { "n", "t" },
-      desc = "[Terminal] New tab (數字前綴開多個，如 2<C-y>)"
-    },
-  },
+  }, vim.tbl_values(terminal_keys)),
 }
