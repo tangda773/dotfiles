@@ -9,6 +9,7 @@
 #
 # Expected layout next to this file:
 #   claude/skills/gen-git-commit-msg/SKILL.md
+#   claude/skills/tuios-tml/SKILL.md
 {
   config,
   pkgs,
@@ -55,6 +56,7 @@ in
     # skills directory a read-only link.)
     skills = {
       gen-git-commit-msg = ./claude/skills/gen-git-commit-msg;
+      tuios-tml = ./claude/skills/tuios-tml;
     };
 
     mcpServers = {
@@ -72,6 +74,9 @@ in
     rules = {
       fff = ''
         For any file search or grep in the current git-indexed directory, use fff tools.
+      '';
+      tuios = ''
+        If $TUIOS_ENV is 1 and the task will produce test results, timings, counts or a comparison, invoke the tuios-tml skill before you start the task.
       '';
     };
   };
