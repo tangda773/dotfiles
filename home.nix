@@ -66,6 +66,27 @@ in
 
     tuios
     tuios-completions
+
+    # network
+    netcat-openbsd
+    dnsutils # dig, nslookup
+    nmap
+    socat
+    mtr
+    traceroute
+    whois
+    iftop
+
+    # debug / system observation
+    lsof
+    strace
+    gdb
+    htop
+    ncdu
+    tree
+    psmisc # killall, pstree
+    rsync
+    zip
   ];
 
   xdg.configFile."fontconfig/conf.d/60-symbols-fallback.conf".text = ''
