@@ -86,7 +86,7 @@ done
 # ---------- 讀設定檔（是 bash 語法，會被 source，請只放自己信任的檔） ----------
 load() {
   [[ -f "$1" ]] || return 0
-  # shellcheck disable=SC1090
+  # shellcheck disable=SC1090 # 設定檔路徑在執行時才決定
   source "$1"
   LOADED+=("$1")
 }
@@ -269,8 +269,7 @@ RSYNC_SSH="ssh$(printf ' %q' "${SSH_OPTS[@]}")"
 
 # 遠端路徑開頭的 ~ 交給遠端 shell 展開，其餘部分加引號
 remote_path() {
-  # ~ 要原樣傳給遠端，故意不在本機展開
-  # shellcheck disable=SC2088
+  # shellcheck disable=SC2088 # ~ 要原樣傳給遠端，故意不在本機展開
   case "$1" in
   "~") printf '~' ;;
   "~/"*) printf '~/%q' "${1#\~/}" ;;
@@ -279,10 +278,25 @@ remote_path() {
 }
 RDIR="$(remote_path "$REMOTE_DIR")"
 
+# 在遠端用 bash 執行一段腳本；第一個參數是 -t 時配置 tty（Ctrl+C、互動輸入才正常）。
+# 腳本以 base64 放在參數裡（不走 stdin，才能和 -t 並用），遠端登入 shell
+# （sh/bash/zsh/fish）只看到純 ASCII，實際內容一律交給 bash 解析。
+remote_bash() {
+  local opts=("${SSH_OPTS[@]}") b64
+  if [[ "$1" == -t ]]; then
+    opts=(-t "${opts[@]}")
+    shift
+  fi
+  # base64 | tr 而不用 GNU 專屬的 -w0，macOS 也能用
+  b64="$(printf '%s\n' "$1" | base64 | tr -d '\n')"
+  # shellcheck disable=SC2029 # 遠端指令本來就要在本機組好再送出
+  ssh "${opts[@]}" "$SSH_TARGET" "exec bash -c 'eval \"\$(printf %s $b64 | base64 -d)\"'"
+}
+
 RSYNC_ARGS=(-az --human-readable --itemize-changes -e "$RSYNC_SSH")
-((DELETE)) && RSYNC_ARGS+=(--delete)
+((DELETE)) && RSYNC_ARGS+=(--delete --filter 'P /deploy.log') # 保護遠端背景執行的 log
 ((DRY_RUN)) && RSYNC_ARGS+=(--dry-run)
-for x in "${EXCLUDES[@]}"; do RSYNC_ARGS+=(--exclude "$x"); done
+for x in ${EXCLUDES[@]+"${EXCLUDES[@]}"}; do RSYNC_ARGS+=(--exclude "$x"); done
 [[ -f "$PROJECT_DIR/.deployignore" ]] && RSYNC_ARGS+=(--exclude-from "$PROJECT_DIR/.deployignore")
 ((USE_GITIGNORE)) && [[ -f "$PROJECT_DIR/.gitignore" ]] && RSYNC_ARGS+=(--filter ':- .gitignore')
 
@@ -297,7 +311,7 @@ SSH        : $SSH_TARGET ${SSH_OPTS[*]}
 停止指令   : ${STOP_CMD:-(無)}
 遠端執行   : ${RUN_CMD:-(無)}$( ((BACKGROUND)) && echo "  [背景，log: deploy.log]")
 刪除多餘檔 : $( ((DELETE)) && echo 是 || echo 否)
-排除       : ${EXCLUDES[*]}$([[ -f .deployignore ]] && echo " + .deployignore")$( ((USE_GITIGNORE)) && echo " + .gitignore")
+排除       : ${EXCLUDES[*]:-}$([[ -f .deployignore ]] && echo " + .deployignore")$( ((USE_GITIGNORE)) && echo " + .gitignore")
 EOF
   exit 0
 fi
@@ -312,9 +326,7 @@ fi
 
 # ---------- 2. 同步 ----------
 info "同步 $PROJECT_DIR/ → $SSH_TARGET:$REMOTE_DIR/"
-# 遠端指令本來就要在本機組好再送出
-# shellcheck disable=SC2029
-ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "mkdir -p $RDIR"
+remote_bash "mkdir -p $RDIR"
 rsync "${RSYNC_ARGS[@]}" "$PROJECT_DIR/" "$SSH_TARGET:$REMOTE_DIR/"
 
 if ((SYNC_ONLY)) || [[ -z "$RUN_CMD" ]]; then
@@ -325,22 +337,25 @@ fi
 # ---------- 3. 停止舊程式 ----------
 if [[ -n "$STOP_CMD" ]]; then
   info "停止舊程式：$STOP_CMD"
-  # 遠端指令本來就要在本機組好再送出
-  # shellcheck disable=SC2029
-  ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "cd $RDIR && { $STOP_CMD; } || true"
+  # 換行包住使用者指令（結尾的註解、; 、& 都不會破壞語法），
+  # 放在子 shell 裡，裡面的 exit 或失敗都不會中止部署
+  remote_bash "cd $RDIR || exit 1
+(
+$STOP_CMD
+) </dev/null || true"
 fi
 
 # ---------- 4. 執行 ----------
 if ((BACKGROUND)); then
   info "遠端背景執行：$RUN_CMD"
-  # 遠端指令本來就要在本機組好再送出
-  # shellcheck disable=SC2029
-  ssh "${SSH_OPTS[@]}" "$SSH_TARGET" \
-    "cd $RDIR && nohup bash -c $(printf %q "$RUN_CMD") > deploy.log 2>&1 < /dev/null & echo \"PID \$!，log：$REMOTE_DIR/deploy.log\""
+  # 在遠端 bash 內解析，%q 產生的引號可以安全使用
+  remote_bash "cd $RDIR || exit 1
+nohup bash -c $(printf %q "$RUN_CMD") > deploy.log 2>&1 < /dev/null &
+printf 'PID %s，log：%s\\n' \"\$!\" $(printf %q "$REMOTE_DIR/deploy.log")"
 else
   info "遠端執行：$RUN_CMD"
-  # -t 讓 Ctrl+C 也能停掉遠端程式
-  # 遠端指令本來就要在本機組好再送出
-  # shellcheck disable=SC2029
-  ssh -t "${SSH_OPTS[@]}" "$SSH_TARGET" "cd $RDIR && $RUN_CMD"
+  # -t 讓 Ctrl+C 也能停掉遠端程式；cd 失敗就不執行任何指令。
+  # 這是最後一個指令，deploy 的結束碼就是遠端程式的結束碼
+  remote_bash -t "cd $RDIR || exit 1
+$RUN_CMD"
 fi
