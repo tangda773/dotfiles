@@ -3,7 +3,7 @@
 #
 # 安裝一次即可在任何專案使用：
 #   install -m 755 deploy.sh ~/.local/bin/deploy
-#   （或用 home-manager：見 deploy.nix）
+#   （或用 home-manager：見 deploy/default.nix）
 #
 # 用法：
 #   deploy [選項] [目標名稱]

@@ -1,10 +1,10 @@
 # home-manager 模組：把 deploy.sh 包成 `deploy` 指令
 #
-# 放在 dotfiles 裡，例如：
-#   dotfiles/home/deploy/default.nix   ← 這個檔（改名成 default.nix）
-#   dotfiles/home/deploy/deploy.sh
+# 檔案位置：
+#   dotfiles/deploy/default.nix   ← 這個檔
+#   dotfiles/deploy/deploy.sh
 #
-# 在 home.nix 裡匯入：
+# 在 dotfiles/home.nix 裡匯入：
 #   imports = [ ./deploy ];
 #
 # 更新腳本：改 dotfiles 裡的 deploy.sh → home-manager switch
