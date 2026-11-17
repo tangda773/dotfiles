@@ -21,7 +21,10 @@ let
   '';
 in
 {
-  imports = [ ./claude.nix ];
+  imports = [
+    ./claude.nix
+    ./deploy
+  ];
   home.username = "kuangtatang";
   home.homeDirectory = "/home/kuangtatang";
   home.stateVersion = "26.05";
