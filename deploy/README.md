@@ -140,14 +140,14 @@ EXCLUDES=(build/)              # 會把內建清單整個換掉
 同步時預設帶 `--delete`，遠端目錄裡**本機沒有的檔案都會被刪掉**，包括：
 
 - 遠端建置產生的檔案，例如 `RUN_CMD="make && ./app"` 產生的 `app`、`build/`。
-- 背景執行時寫在遠端的 `deploy.log`。
 - 程式在遠端產生的資料、資料庫、上傳檔案等。
+
+背景執行寫在遠端目錄的 `deploy.log` 是例外，會自動保護，不會被刪掉。
 
 被排除的檔案不會被刪，所以要保留的東西就加進 `.deployignore`：
 
 ```
 build/
-deploy.log
 data/
 ```
 
@@ -219,6 +219,8 @@ deploy -s                               # 這次只同步
   ssh space-a 'tail -f ~/apps/myapp/deploy.log'
   ```
 
+  遠端腳本一律交給 bash 執行，所以遠端使用者的登入 shell 是 sh、dash、zsh 或 fish 都沒關係。
+
   背景執行的程式不會自動停止，所以通常要搭配 `STOP_CMD` 在下次部署前停掉舊程式。
 
 ## 自我更新
@@ -232,3 +234,15 @@ deploy --self-update=SRC
 更新前會檢查新版是 bash 腳本、語法正確，舊版會備份成 `<腳本>.bak`。
 
 用 Nix/home-manager 安裝的版本不能自我更新，請改 `deploy/deploy.sh` 後再 switch。
+
+## 測試
+
+`test-deploy.sh` 用一個假的 `ssh`（在本機的假遠端家目錄裡執行指令）端到端測試同步、停止與執行，不需要真的遠端機器：
+
+```sh
+./test-deploy.sh                       # 遠端登入 shell 用 PATH 裡有的 bash/dash/zsh/fish
+SHELLS="bash dash" ./test-deploy.sh
+DEPLOY_BASH="bash --posix" ./test-deploy.sh
+```
+
+缺少 dash 或 fish 時，可以用 `nix shell nixpkgs#dash nixpkgs#fish -c ./test-deploy.sh`。
