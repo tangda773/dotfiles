@@ -1,45 +1,46 @@
 #!/usr/bin/env bash
-# deploy — 通用 rsync 部署腳本：同步專案到遠端機器（Pi 或任何 Linux），再建置 / 執行。
+# deploy — generic rsync deploy script: sync a project to a remote machine (a Pi or any Linux host), then build / run it there.
 #
-# 安裝一次即可在任何專案使用：
+# Install once and use it in any project:
 #   install -m 755 deploy.sh ~/.local/bin/deploy
-#   （或用 home-manager：見 deploy/default.nix）
+#   (or via home-manager: see deploy/default.nix)
 #
-# 用法：
-#   deploy [選項] [目標名稱]
+# Usage:
+#   deploy [options] [target]
 #
-#   目標名稱（可省略）會讀取 .deploy.<名稱>.conf，例如 `deploy pi2`
+#   target (optional) reads .deploy.<target>.conf, e.g. `deploy pi2`
 #
-# 選項：
-#   -H, --host HOST        遠端主機（也可寫 user@host）
-#   -u, --user USER        SSH 使用者
-#   -p, --port PORT        SSH 連接埠
-#   -i, --key FILE         SSH 私鑰
-#   -d, --dir DIR          遠端目錄（預設 ~/<專案資料夾名>）
-#   -b, --build CMD        同步「前」在本機執行（例：交叉編譯）
-#   -c, --cmd CMD          同步「後」在遠端執行（例：make && ./app）
-#   -S, --stop CMD         執行前先在遠端執行的停止指令
-#   -e, --exclude PATTERN  額外排除（可重複）
-#   -B, --background       遠端在背景執行，輸出寫到 deploy.log
-#   -s, --sync-only        只同步，不執行
-#   -n, --dry-run          只顯示會變動的檔案
-#       --no-delete        不刪除遠端多出的檔案
-#       --show             印出最終設定後結束
-#       --self-update[=SRC] 更新 deploy 腳本本身後結束（見下方）
-#   -h, --help             顯示說明
+# Options:
+#   -H, --host HOST        remote host (user@host also works)
+#   -u, --user USER        SSH user
+#   -p, --port PORT        SSH port
+#   -i, --key FILE         SSH private key
+#   -d, --dir DIR          remote directory (default ~/<project dir name>)
+#   -b, --build CMD        run locally BEFORE syncing (e.g. cross-compile)
+#   -c, --cmd CMD          run remotely AFTER syncing (e.g. make && ./app)
+#   -S, --stop CMD         run remotely before CMD to stop the old process
+#   -e, --exclude PATTERN  extra exclude pattern (repeatable)
+#   -B, --background       run CMD in the background, output to deploy.log
+#   -s, --sync-only        sync only, do not run CMD
+#   -n, --dry-run          only list the files that would change
+#       --no-delete        keep remote files that do not exist locally
+#       --show             print the final settings and exit
+#       --self-update[=SRC] update the deploy script itself and exit (see below)
+#   -h, --help             show this help
 #
-# 自我更新（--self-update）：
-#   SRC 可以是 https URL、檔案路徑，或含 deploy.sh 的 git repo 資料夾。
-#   沒給 SRC 時用設定裡的 SELF_UPDATE_SRC；兩者都沒有、但腳本本身
-#   位在 git repo 裡（例如用 symlink 安裝）時，就在那個 repo 做 git pull。
-#   更新前會先檢查語法，舊版備份成 <腳本>.bak。
+# Self-update (--self-update):
+#   SRC can be an https URL, a file path, or a git repo directory containing
+#   deploy.sh. Without SRC, SELF_UPDATE_SRC from the config is used; if neither
+#   is set but the script itself lives in a git repo (e.g. installed via
+#   symlink), it runs git pull in that repo.
+#   The new version is syntax-checked first; the old one is kept as <script>.bak.
 #
-# 設定來源（後者覆蓋前者）：
-#   內建預設 < ~/.config/deploy/config < <專案>/.deploy.conf
-#   < <專案>/.deploy.<目標>.conf < 環境變數 DEPLOY_* < 命令列選項
+# Config sources (later ones override earlier ones):
+#   built-in defaults < ~/.config/deploy/config < <project>/.deploy.conf
+#   < <project>/.deploy.<target>.conf < DEPLOY_* env vars < command-line options
 #
-# 排除規則：內建清單 + <專案>/.deployignore（rsync 語法，每行一條）
-#   若設 USE_GITIGNORE=1，也會套用專案的 .gitignore。
+# Excludes: built-in list + <project>/.deployignore (rsync syntax, one rule per line)
+#   With USE_GITIGNORE=1, the project's .gitignore is applied too.
 
 set -euo pipefail
 
@@ -47,11 +48,11 @@ die() {
   echo "deploy: $*" >&2
   exit 1
 }
-# 說明文字取自檔頭註解（用標記找，包成 nix 套件後行號會變也沒關係）
+# Help text comes from the header comment (found by marker, so line numbers may change when packaged by nix)
 usage() { awk '/^# deploy — /{f=1} f && !/^#/{exit} f{sub(/^# ?/, ""); print}' "${BASH_SOURCE[0]}"; }
 info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
-# ---------- 內建預設 ----------
+# ---------- built-in defaults ----------
 PROJECT_DIR="$(pwd)"
 HOST=""
 USER_NAME=""
@@ -68,7 +69,7 @@ SELF_UPDATE_SRC=""
 EXCLUDES=(.git/ .svn/ .hg/ .vscode/ .idea/ __pycache__/ '*.pyc' venv/ .venv/
   node_modules/ .DS_Store Thumbs.db '.deploy*.conf' .deployignore)
 
-# ---------- 先掃描：只找出 -h 與目標名稱，好決定要讀哪些設定檔 ----------
+# ---------- pre-scan: find only -h and the target name, to decide which config files to read ----------
 TARGET=""
 args=("$@")
 for ((k = 0; k < ${#args[@]}; k++)); do
@@ -83,10 +84,10 @@ for ((k = 0; k < ${#args[@]}; k++)); do
   esac
 done
 
-# ---------- 讀設定檔（是 bash 語法，會被 source，請只放自己信任的檔） ----------
+# ---------- read config files (bash syntax, sourced: only use files you trust) ----------
 load() {
   [[ -f "$1" ]] || return 0
-  # shellcheck disable=SC1090 # 設定檔路徑在執行時才決定
+  # shellcheck disable=SC1090 # config paths are only known at runtime
   source "$1"
   LOADED+=("$1")
 }
@@ -94,11 +95,11 @@ LOADED=()
 load "${XDG_CONFIG_HOME:-$HOME/.config}/deploy/config"
 load "$PROJECT_DIR/.deploy.conf"
 if [[ -n "$TARGET" ]]; then
-  [[ -f "$PROJECT_DIR/.deploy.$TARGET.conf" ]] || die "找不到 .deploy.$TARGET.conf"
+  [[ -f "$PROJECT_DIR/.deploy.$TARGET.conf" ]] || die "cannot find .deploy.$TARGET.conf"
   load "$PROJECT_DIR/.deploy.$TARGET.conf"
 fi
 
-# ---------- 環境變數 ----------
+# ---------- environment variables ----------
 HOST="${DEPLOY_HOST:-$HOST}"
 USER_NAME="${DEPLOY_USER:-$USER_NAME}"
 PORT="${DEPLOY_PORT:-$PORT}"
@@ -109,56 +110,56 @@ RUN_CMD="${DEPLOY_CMD:-$RUN_CMD}"
 STOP_CMD="${DEPLOY_STOP:-$STOP_CMD}"
 SELF_UPDATE_SRC="${DEPLOY_SELF_UPDATE_SRC:-$SELF_UPDATE_SRC}"
 
-# ---------- 自我更新 ----------
+# ---------- self-update ----------
 self_update() {
   local src="$1" self dir tmp
   self="$(readlink -f "${BASH_SOURCE[0]}")"
   dir="$(dirname "$self")"
 
-  # 由 Nix / home-manager 安裝：檔案在唯讀的 /nix/store，要從 dotfiles 更新
+  # Installed by Nix / home-manager: the file is in the read-only /nix/store; update via dotfiles
   if [[ "$self" == /nix/store/* ]]; then
-    die "這份 deploy 由 Nix/home-manager 管理（$self）。請改 dotfiles 裡的 deploy.sh，再執行 home-manager switch。"
+    die "this deploy is managed by Nix/home-manager ($self). Edit deploy.sh in your dotfiles, then run home-manager switch."
   fi
 
-  # 沒有來源：腳本本身在 git repo 裡就直接 pull
+  # No source: if the script itself is in a git repo, just pull
   if [[ -z "$src" ]]; then
     if git -C "$dir" rev-parse --is-inside-work-tree &>/dev/null; then
-      info "git pull：$dir"
+      info "git pull: $dir"
       git -C "$dir" pull --ff-only
       exit 0
     fi
-    die "沒有更新來源：用 --self-update=來源，或在 ~/.config/deploy/config 設 SELF_UPDATE_SRC=..."
+    die "no update source: use --self-update=SRC, or set SELF_UPDATE_SRC=... in ~/.config/deploy/config"
   fi
 
-  [[ -w "$dir" ]] || die "沒有寫入權限：$dir"
-  # 暫存檔放同一個資料夾，最後用 mv 原子替換（不會改到正在執行的檔案內容）
+  [[ -w "$dir" ]] || die "no write permission: $dir"
+  # Temp file in the same directory, then replaced atomically with mv (never modifies the running file's content)
   tmp="$(mktemp "$self.new.XXXXXX")"
   trap 'rm -f "$tmp"' EXIT
 
   case "$src" in
   http://* | https://*)
-    info "下載 $src"
-    curl -fsSL "$src" -o "$tmp" || die "下載失敗"
+    info "downloading $src"
+    curl -fsSL "$src" -o "$tmp" || die "download failed"
     ;;
   *)
     if [[ -d "$src" ]]; then
       if git -C "$src" rev-parse --is-inside-work-tree &>/dev/null; then
-        info "git pull：$src"
+        info "git pull: $src"
         git -C "$src" pull --ff-only
       fi
       src="$src/deploy.sh"
     fi
-    [[ -f "$src" ]] || die "找不到 $src"
+    [[ -f "$src" ]] || die "cannot find $src"
     cp "$src" "$tmp"
     ;;
   esac
 
-  [[ -s "$tmp" ]] || die "新版是空檔，取消更新"
-  head -n1 "$tmp" | grep -q '^#!.*bash' || die "新版不像是 bash 腳本，取消更新"
-  bash -n "$tmp" || die "新版語法錯誤，取消更新"
+  [[ -s "$tmp" ]] || die "new version is empty, update cancelled"
+  head -n1 "$tmp" | grep -q '^#!.*bash' || die "new version does not look like a bash script, update cancelled"
+  bash -n "$tmp" || die "new version has syntax errors, update cancelled"
 
   if cmp -s "$tmp" "$self"; then
-    info "已經是最新版"
+    info "already up to date"
     exit 0
   fi
 
@@ -166,15 +167,15 @@ self_update() {
   chmod 755 "$tmp"
   mv -f "$tmp" "$self"
   trap - EXIT
-  info "已更新：$self（舊版：$self.bak）"
+  info "updated: $self (old version: $self.bak)"
   exit 0
 }
 
-# ---------- 命令列選項 ----------
+# ---------- command-line options ----------
 SYNC_ONLY=0
 DRY_RUN=0
 SHOW=0
-need() { [[ $# -ge 2 && -n "$2" ]] || die "$1 需要參數"; }
+need() { [[ $# -ge 2 && -n "$2" ]] || die "$1 requires an argument"; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
   -H | --host)
@@ -245,18 +246,18 @@ while [[ $# -gt 0 ]]; do
     ;;
   --self-update) self_update "$SELF_UPDATE_SRC" ;;
   --self-update=*) self_update "${1#*=}" ;;
-  -*) die "未知選項：$1（看 --help）" ;;
-  *) shift ;; # 目標名稱，前面已處理
+  -*) die "unknown option: $1 (see --help)" ;;
+  *) shift ;; # target name, handled earlier
   esac
 done
 
-# ---------- 整理最終值 ----------
-[[ -n "$HOST" ]] || die "沒有指定主機：用 -H、DEPLOY_HOST 或在 .deploy.conf 寫 HOST=..."
+# ---------- resolve final values ----------
+[[ -n "$HOST" ]] || die "no host given: use -H, DEPLOY_HOST, or HOST=... in .deploy.conf"
 if [[ "$HOST" == *@* ]]; then
   SSH_TARGET="$HOST"
 elif [[ -n "$USER_NAME" ]]; then
   SSH_TARGET="$USER_NAME@$HOST"
-else SSH_TARGET="$HOST"; fi # 交給 ~/.ssh/config 決定使用者
+else SSH_TARGET="$HOST"; fi # let ~/.ssh/config decide the user
 
 PROJECT_NAME="$(basename "$PROJECT_DIR")"
 REMOTE_DIR="${REMOTE_DIR:-~/$PROJECT_NAME}"
@@ -264,12 +265,12 @@ REMOTE_DIR="${REMOTE_DIR:-~/$PROJECT_NAME}"
 SSH_OPTS=(-o ConnectTimeout=10)
 [[ -n "$PORT" ]] && SSH_OPTS+=(-p "$PORT")
 [[ -n "$KEY" ]] && SSH_OPTS+=(-i "$KEY")
-# 讓 rsync 使用同一組 ssh 參數
+# Make rsync use the same ssh options
 RSYNC_SSH="ssh$(printf ' %q' "${SSH_OPTS[@]}")"
 
-# 遠端路徑開頭的 ~ 交給遠端 shell 展開，其餘部分加引號
+# A leading ~ in the remote path is left for the remote shell to expand; the rest is quoted
 remote_path() {
-  # shellcheck disable=SC2088 # ~ 要原樣傳給遠端，故意不在本機展開
+  # shellcheck disable=SC2088 # ~ is passed verbatim to the remote, deliberately not expanded locally
   case "$1" in
   "~") printf '~' ;;
   "~/"*) printf '~/%q' "${1#\~/}" ;;
@@ -278,61 +279,61 @@ remote_path() {
 }
 RDIR="$(remote_path "$REMOTE_DIR")"
 
-# 在遠端用 bash 執行一段腳本；第一個參數是 -t 時配置 tty（Ctrl+C、互動輸入才正常）。
-# 腳本以 base64 放在參數裡（不走 stdin，才能和 -t 並用），遠端登入 shell
-# （sh/bash/zsh/fish）只看到純 ASCII，實際內容一律交給 bash 解析。
+# Run a script on the remote with bash; a first argument of -t allocates a tty (so Ctrl+C and
+# interactive input work). The script travels base64-encoded in the arguments (not via stdin, so it
+# works with -t); the remote login shell (sh/bash/zsh/fish) only sees plain ASCII, and bash parses the content.
 remote_bash() {
   local opts=("${SSH_OPTS[@]}") b64
   if [[ "$1" == -t ]]; then
     opts=(-t "${opts[@]}")
     shift
   fi
-  # base64 | tr 而不用 GNU 專屬的 -w0，macOS 也能用
+  # base64 | tr instead of GNU-only -w0, so it also works on macOS
   b64="$(printf '%s\n' "$1" | base64 | tr -d '\n')"
-  # shellcheck disable=SC2029 # 遠端指令本來就要在本機組好再送出
+  # shellcheck disable=SC2029 # the remote command is meant to be built locally
   ssh "${opts[@]}" "$SSH_TARGET" "exec bash -c 'eval \"\$(printf %s $b64 | base64 -d)\"'"
 }
 
-# 把 rsync --itemize-changes 的代碼（如 <f+++++++++）翻成好讀的一行一個檔案：
-#   + 新增 / ~ 更新 / * 屬性（只有權限、擁有者等改變）/ - 刪除，最後印一行摘要。
-# 目錄本身不列，底下的檔案會列出來；不認得的行原樣印出。
+# Turn rsync --itemize-changes codes (e.g. <f+++++++++) into one readable line per file:
+#   + new / ~ update / * attrs (only permissions, owner, etc. changed) / - delete, then a summary line.
+# Directories themselves are not listed (their files are); unrecognized lines are printed as is.
 print_changes() {
   local color=0
   [[ -t 1 ]] && color=1
   awk -v color="$color" -v dry="$DRY_RUN" '
     BEGIN {
       if (color) { G = "\033[32m"; Y = "\033[33m"; C = "\033[36m"; R = "\033[31m"; N = "\033[0m" }
-      split("c:內容 s:大小 t:時間 p:權限 o:擁有者 g:群組 a:ACL x:xattr", kv, " ")
+      split("c:content s:size t:time p:perms o:owner g:group a:ACL x:xattr", kv, " ")
       for (i in kv) { split(kv[i], p, ":"); name[p[1]] = p[2] }
     }
     /^\*deleting / {
       path = $0; sub(/^\*deleting +/, "", path)
-      printf "  %s- 刪除%s  %s\n", R, N, path; del++; next
+      printf "  %s- delete%s  %s\n", R, N, path; del++; next
     }
     !/^[<>ch.][fdLDS][^ ]{9} / { print; next }
     {
       code = substr($0, 1, 11); path = substr($0, 13)
       act = substr(code, 1, 1); type = substr(code, 2, 1); attrs = substr(code, 3)
       if (type == "d") next
-      if (attrs ~ /^\++$/) { printf "  %s+ 新增%s  %s\n", G, N, path; add++; next }
-      if (act != ".")      { printf "  %s~ 更新%s  %s\n", Y, N, path; upd++; next }
+      if (attrs ~ /^\++$/) { printf "  %s+ new%s     %s\n", G, N, path; add++; next }
+      if (act != ".")      { printf "  %s~ update%s  %s\n", Y, N, path; upd++; next }
       what = ""
       for (i = 1; i <= length(attrs); i++) {
         ch = substr(attrs, i, 1)
-        if (ch in name) what = what (what == "" ? "" : "、") name[ch]
+        if (ch in name) what = what (what == "" ? "" : ", ") name[ch]
       }
-      printf "  %s* 屬性%s  %s（%s）\n", C, N, path, what; att++
+      printf "  %s* attrs%s   %s (%s)\n", C, N, path, what; att++
     }
     END {
-      if (add + upd + att + del == 0) s = "沒有變更"
-      else s = sprintf("新增 %d、更新 %d、屬性 %d、刪除 %d", add, upd, att, del)
-      if (dry) s = s "（dry-run，未實際同步）"
+      if (add + upd + att + del == 0) s = "no changes"
+      else s = sprintf("%d new, %d updated, %d attrs, %d deleted", add, upd, att, del)
+      if (dry) s = s " (dry run, nothing synced)"
       print "  " s
     }'
 }
 
 RSYNC_ARGS=(-az --human-readable --itemize-changes -e "$RSYNC_SSH")
-((DELETE)) && RSYNC_ARGS+=(--delete --filter 'P /deploy.log') # 保護遠端背景執行的 log
+((DELETE)) && RSYNC_ARGS+=(--delete --filter 'P /deploy.log') # protect the remote background-run log
 ((DRY_RUN)) && RSYNC_ARGS+=(--dry-run)
 for x in ${EXCLUDES[@]+"${EXCLUDES[@]}"}; do RSYNC_ARGS+=(--exclude "$x"); done
 [[ -f "$PROJECT_DIR/.deployignore" ]] && RSYNC_ARGS+=(--exclude-from "$PROJECT_DIR/.deployignore")
@@ -340,27 +341,27 @@ for x in ${EXCLUDES[@]+"${EXCLUDES[@]}"}; do RSYNC_ARGS+=(--exclude "$x"); done
 
 if ((SHOW)); then
   cat <<EOF
-設定檔     : ${LOADED[*]:-(無)}
-目標       : ${TARGET:-(預設)}
-SSH        : $SSH_TARGET ${SSH_OPTS[*]}
-本機目錄   : $PROJECT_DIR/
-遠端目錄   : $REMOTE_DIR
-本機建置   : ${BUILD_CMD:-(無)}
-停止指令   : ${STOP_CMD:-(無)}
-遠端執行   : ${RUN_CMD:-(無)}$( ((BACKGROUND)) && echo "  [背景，log: deploy.log]")
-刪除多餘檔 : $( ((DELETE)) && echo 是 || echo 否)
-排除       : ${EXCLUDES[*]:-}$([[ -f .deployignore ]] && echo " + .deployignore")$( ((USE_GITIGNORE)) && echo " + .gitignore")
+Config files : ${LOADED[*]:-(none)}
+Target       : ${TARGET:-(default)}
+SSH          : $SSH_TARGET ${SSH_OPTS[*]}
+Local dir    : $PROJECT_DIR/
+Remote dir   : $REMOTE_DIR
+Local build  : ${BUILD_CMD:-(none)}
+Stop command : ${STOP_CMD:-(none)}
+Remote run   : ${RUN_CMD:-(none)}$( ((BACKGROUND)) && echo "  [background, log: deploy.log]")
+Delete extra : $( ((DELETE)) && echo yes || echo no)
+Excludes     : ${EXCLUDES[*]:-}$([[ -f .deployignore ]] && echo " + .deployignore")$( ((USE_GITIGNORE)) && echo " + .gitignore")
 EOF
   exit 0
 fi
 
-command -v rsync >/dev/null || die "本機沒有安裝 rsync"
+command -v rsync >/dev/null || die "rsync is not installed locally"
 
-# 連線前確認主機金鑰已在 known_hosts。
-# 在終端機裡 ssh 會自己問要不要信任；沒有終端機（cron、CI、agent）時 ssh 只會
-# 丟出 "Host key verification failed"，看不出原因，所以先在這裡給清楚的錯誤。
-# 查名稱的方式跟 ssh 一樣：有 HostKeyAlias 用別名，否則 HostName（非 22 埠寫成 [host]:port）。
-# 讀不到 ssh 設定、或設定不需要檢查時就不擋，交給 ssh 自己處理。
+# Before connecting, make sure the host key is already in known_hosts.
+# In a terminal ssh asks whether to trust it; without one (cron, CI, an agent) ssh only says
+# "Host key verification failed" with no hint why, so give a clear error here first.
+# The lookup name matches ssh's: the HostKeyAlias if set, else HostName ([host]:port for a non-22 port).
+# If the ssh config cannot be read or needs no check, don't block; leave it to ssh.
 check_host_key() {
   local cfg k v name="" alias="" port="" strict="" f
   local files=() more=()
@@ -371,7 +372,7 @@ check_host_key() {
     hostkeyalias) alias="$v" ;;
     port) port="$v" ;;
     stricthostkeychecking) strict="$v" ;;
-    knownhostscommand) [[ "$v" == none ]] || return 0 ;; # 金鑰來源是外部指令，查不了
+    knownhostscommand) [[ "$v" == none ]] || return 0 ;; # keys come from an external command; cannot check
     userknownhostsfile | globalknownhostsfile)
       read -r -a more <<<"$v"
       files+=("${more[@]}")
@@ -392,56 +393,56 @@ check_host_key() {
   done
 
   if (: </dev/tty) 2>/dev/null; then
-    info "第一次連線到 $SSH_TARGET（known_hosts 裡沒有 $name），ssh 會要你確認主機金鑰指紋"
+    info "first connection to $SSH_TARGET ($name is not in known_hosts); ssh will ask you to confirm the host key fingerprint"
     return 0
   fi
-  die "主機 $SSH_TARGET 的金鑰不在 known_hosts（查的名稱：$name），而且沒有終端機可以讓 ssh 詢問。
-請先在終端機執行下面的指令，確認指紋後輸入 yes，再重新部署：
+  die "host key for $SSH_TARGET is not in known_hosts (looked up as: $name), and there is no terminal for ssh to ask.
+Run this in a terminal first, verify the fingerprint and type yes, then deploy again:
   $RSYNC_SSH $SSH_TARGET true"
 }
 check_host_key
 
-# ---------- 1. 本機建置 ----------
+# ---------- 1. local build ----------
 if [[ -n "$BUILD_CMD" ]] && ! ((DRY_RUN)); then
-  info "本機建置：$BUILD_CMD"
+  info "local build: $BUILD_CMD"
   (cd "$PROJECT_DIR" && bash -c "$BUILD_CMD")
 fi
 
-# ---------- 2. 同步 ----------
-info "同步 $PROJECT_DIR/ → $SSH_TARGET:$REMOTE_DIR/"
+# ---------- 2. sync ----------
+info "syncing $PROJECT_DIR/ → $SSH_TARGET:$REMOTE_DIR/"
 remote_bash "mkdir -p $RDIR"
 rsync "${RSYNC_ARGS[@]}" "$PROJECT_DIR/" "$SSH_TARGET:$REMOTE_DIR/" | print_changes
 
 if ((DRY_RUN)); then
-  info "dry-run 結束：沒有同步、建置或執行"
+  info "dry run done: nothing synced, built or run"
   exit 0
 elif ((SYNC_ONLY)) || [[ -z "$RUN_CMD" ]]; then
-  info "完成（只同步）"
+  info "done (sync only)"
   exit 0
 fi
 
-# ---------- 3. 停止舊程式 ----------
+# ---------- 3. stop the old process ----------
 if [[ -n "$STOP_CMD" ]]; then
-  info "停止舊程式：$STOP_CMD"
-  # 換行包住使用者指令（結尾的註解、; 、& 都不會破壞語法），
-  # 放在子 shell 裡，裡面的 exit 或失敗都不會中止部署
+  info "stopping old process: $STOP_CMD"
+  # Wrap the user command in newlines (a trailing comment, ; or & cannot break the syntax)
+  # and run it in a subshell, so an exit or failure inside does not abort the deploy
   remote_bash "cd $RDIR || exit 1
 (
 $STOP_CMD
 ) </dev/null || true"
 fi
 
-# ---------- 4. 執行 ----------
+# ---------- 4. run ----------
 if ((BACKGROUND)); then
-  info "遠端背景執行：$RUN_CMD"
-  # 在遠端 bash 內解析，%q 產生的引號可以安全使用
+  info "running in background on remote: $RUN_CMD"
+  # Parsed by the remote bash, so %q quoting is safe
   remote_bash "cd $RDIR || exit 1
 nohup bash -c $(printf %q "$RUN_CMD") > deploy.log 2>&1 < /dev/null &
-printf 'PID %s，log：%s\\n' \"\$!\" $(printf %q "$REMOTE_DIR/deploy.log")"
+printf 'PID %s, log: %s\\n' \"\$!\" $(printf %q "$REMOTE_DIR/deploy.log")"
 else
-  info "遠端執行：$RUN_CMD"
-  # -t 讓 Ctrl+C 也能停掉遠端程式；cd 失敗就不執行任何指令。
-  # 這是最後一個指令，deploy 的結束碼就是遠端程式的結束碼
+  info "running on remote: $RUN_CMD"
+  # -t lets Ctrl+C stop the remote program too; if cd fails, nothing runs.
+  # This is the last command, so deploy's exit code is the remote program's exit code
   remote_bash -t "cd $RDIR || exit 1
 $RUN_CMD"
 fi
