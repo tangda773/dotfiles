@@ -293,6 +293,44 @@ remote_bash() {
   ssh "${opts[@]}" "$SSH_TARGET" "exec bash -c 'eval \"\$(printf %s $b64 | base64 -d)\"'"
 }
 
+# 把 rsync --itemize-changes 的代碼（如 <f+++++++++）翻成好讀的一行一個檔案：
+#   + 新增 / ~ 更新 / * 屬性（只有權限、擁有者等改變）/ - 刪除，最後印一行摘要。
+# 目錄本身不列，底下的檔案會列出來；不認得的行原樣印出。
+print_changes() {
+  local color=0
+  [[ -t 1 ]] && color=1
+  awk -v color="$color" -v dry="$DRY_RUN" '
+    BEGIN {
+      if (color) { G = "\033[32m"; Y = "\033[33m"; C = "\033[36m"; R = "\033[31m"; N = "\033[0m" }
+      split("c:內容 s:大小 t:時間 p:權限 o:擁有者 g:群組 a:ACL x:xattr", kv, " ")
+      for (i in kv) { split(kv[i], p, ":"); name[p[1]] = p[2] }
+    }
+    /^\*deleting / {
+      path = $0; sub(/^\*deleting +/, "", path)
+      printf "  %s- 刪除%s  %s\n", R, N, path; del++; next
+    }
+    !/^[<>ch.][fdLDS][^ ]{9} / { print; next }
+    {
+      code = substr($0, 1, 11); path = substr($0, 13)
+      act = substr(code, 1, 1); type = substr(code, 2, 1); attrs = substr(code, 3)
+      if (type == "d") next
+      if (attrs ~ /^\++$/) { printf "  %s+ 新增%s  %s\n", G, N, path; add++; next }
+      if (act != ".")      { printf "  %s~ 更新%s  %s\n", Y, N, path; upd++; next }
+      what = ""
+      for (i = 1; i <= length(attrs); i++) {
+        ch = substr(attrs, i, 1)
+        if (ch in name) what = what (what == "" ? "" : "、") name[ch]
+      }
+      printf "  %s* 屬性%s  %s（%s）\n", C, N, path, what; att++
+    }
+    END {
+      if (add + upd + att + del == 0) s = "沒有變更"
+      else s = sprintf("新增 %d、更新 %d、屬性 %d、刪除 %d", add, upd, att, del)
+      if (dry) s = s "（dry-run，未實際同步）"
+      print "  " s
+    }'
+}
+
 RSYNC_ARGS=(-az --human-readable --itemize-changes -e "$RSYNC_SSH")
 ((DELETE)) && RSYNC_ARGS+=(--delete --filter 'P /deploy.log') # 保護遠端背景執行的 log
 ((DRY_RUN)) && RSYNC_ARGS+=(--dry-run)
@@ -327,9 +365,12 @@ fi
 # ---------- 2. 同步 ----------
 info "同步 $PROJECT_DIR/ → $SSH_TARGET:$REMOTE_DIR/"
 remote_bash "mkdir -p $RDIR"
-rsync "${RSYNC_ARGS[@]}" "$PROJECT_DIR/" "$SSH_TARGET:$REMOTE_DIR/"
+rsync "${RSYNC_ARGS[@]}" "$PROJECT_DIR/" "$SSH_TARGET:$REMOTE_DIR/" | print_changes
 
-if ((SYNC_ONLY)) || [[ -z "$RUN_CMD" ]]; then
+if ((DRY_RUN)); then
+  info "dry-run 結束：沒有同步、建置或執行"
+  exit 0
+elif ((SYNC_ONLY)) || [[ -z "$RUN_CMD" ]]; then
   info "完成（只同步）"
   exit 0
 fi
