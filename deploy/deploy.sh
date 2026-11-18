@@ -25,15 +25,7 @@
 #   -n, --dry-run          only list the files that would change
 #       --no-delete        keep remote files that do not exist locally
 #       --show             print the final settings and exit
-#       --self-update[=SRC] update the deploy script itself and exit (see below)
 #   -h, --help             show this help
-#
-# Self-update (--self-update):
-#   SRC can be an https URL, a file path, or a git repo directory containing
-#   deploy.sh. Without SRC, SELF_UPDATE_SRC from the config is used; if neither
-#   is set but the script itself lives in a git repo (e.g. installed via
-#   symlink), it runs git pull in that repo.
-#   The new version is syntax-checked first; the old one is kept as <script>.bak.
 #
 # Config sources (later ones override earlier ones):
 #   built-in defaults < ~/.config/deploy/config < <project>/.deploy.conf
@@ -65,7 +57,6 @@ STOP_CMD=""
 BACKGROUND=0
 DELETE=1
 USE_GITIGNORE=0
-SELF_UPDATE_SRC=""
 EXCLUDES=(.git/ .svn/ .hg/ .vscode/ .idea/ __pycache__/ '*.pyc' venv/ .venv/
   node_modules/ .DS_Store Thumbs.db '.deploy*.conf' .deployignore)
 
@@ -108,68 +99,6 @@ REMOTE_DIR="${DEPLOY_DIR:-$REMOTE_DIR}"
 BUILD_CMD="${DEPLOY_BUILD:-$BUILD_CMD}"
 RUN_CMD="${DEPLOY_CMD:-$RUN_CMD}"
 STOP_CMD="${DEPLOY_STOP:-$STOP_CMD}"
-SELF_UPDATE_SRC="${DEPLOY_SELF_UPDATE_SRC:-$SELF_UPDATE_SRC}"
-
-# ---------- self-update ----------
-self_update() {
-  local src="$1" self dir tmp
-  self="$(readlink -f "${BASH_SOURCE[0]}")"
-  dir="$(dirname "$self")"
-
-  # Installed by Nix / home-manager: the file is in the read-only /nix/store; update via dotfiles
-  if [[ "$self" == /nix/store/* ]]; then
-    die "this deploy is managed by Nix/home-manager ($self). Edit deploy.sh in your dotfiles, then run home-manager switch."
-  fi
-
-  # No source: if the script itself is in a git repo, just pull
-  if [[ -z "$src" ]]; then
-    if git -C "$dir" rev-parse --is-inside-work-tree &>/dev/null; then
-      info "git pull: $dir"
-      git -C "$dir" pull --ff-only
-      exit 0
-    fi
-    die "no update source: use --self-update=SRC, or set SELF_UPDATE_SRC=... in ~/.config/deploy/config"
-  fi
-
-  [[ -w "$dir" ]] || die "no write permission: $dir"
-  # Temp file in the same directory, then replaced atomically with mv (never modifies the running file's content)
-  tmp="$(mktemp "$self.new.XXXXXX")"
-  trap 'rm -f "$tmp"' EXIT
-
-  case "$src" in
-  http://* | https://*)
-    info "downloading $src"
-    curl -fsSL "$src" -o "$tmp" || die "download failed"
-    ;;
-  *)
-    if [[ -d "$src" ]]; then
-      if git -C "$src" rev-parse --is-inside-work-tree &>/dev/null; then
-        info "git pull: $src"
-        git -C "$src" pull --ff-only
-      fi
-      src="$src/deploy.sh"
-    fi
-    [[ -f "$src" ]] || die "cannot find $src"
-    cp "$src" "$tmp"
-    ;;
-  esac
-
-  [[ -s "$tmp" ]] || die "new version is empty, update cancelled"
-  head -n1 "$tmp" | grep -q '^#!.*bash' || die "new version does not look like a bash script, update cancelled"
-  bash -n "$tmp" || die "new version has syntax errors, update cancelled"
-
-  if cmp -s "$tmp" "$self"; then
-    info "already up to date"
-    exit 0
-  fi
-
-  cp -p "$self" "$self.bak"
-  chmod 755 "$tmp"
-  mv -f "$tmp" "$self"
-  trap - EXIT
-  info "updated: $self (old version: $self.bak)"
-  exit 0
-}
 
 # ---------- command-line options ----------
 SYNC_ONLY=0
@@ -244,8 +173,6 @@ while [[ $# -gt 0 ]]; do
     SHOW=1
     shift
     ;;
-  --self-update) self_update "$SELF_UPDATE_SRC" ;;
-  --self-update=*) self_update "${1#*=}" ;;
   -*) die "unknown option: $1 (see --help)" ;;
   *) shift ;; # target name, handled earlier
   esac

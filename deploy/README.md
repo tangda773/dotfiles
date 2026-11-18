@@ -19,9 +19,9 @@ This directory is a home-manager module, already imported in `home.nix`:
 imports = [ ./deploy ];
 ```
 
-After `home-manager switch` (or `nh home switch`) the `deploy` command is available. rsync, ssh, git and the other dependencies come from Nix, so nothing else needs to be installed on the system.
+After `home-manager switch` (or `nh home switch`) the `deploy` command is available. rsync, ssh and the other dependencies come from Nix, so nothing else needs to be installed on the system.
 
-To change the script, edit `deploy/deploy.sh` and switch again. The build runs shellcheck and fails on any warning. The Nix-installed copy lives in the read-only `/nix/store`, so `--self-update` refuses to run and points you to this workflow instead.
+To change the script, edit `deploy/deploy.sh` and switch again. The build runs shellcheck and fails on any warning.
 
 On machines without Nix, install the script directly:
 
@@ -107,7 +107,6 @@ deploy [options] [target]
 | `-n, --dry-run` | only list what would change; no local build, no run |
 | `--no-delete` | keep remote files that do not exist locally |
 | `--show` | print the final settings and exit without connecting |
-| `--self-update[=SRC]` | update the script itself, see [Self-update](#self-update) |
 | `-h, --help` | show help |
 
 **Target**: if given, `.deploy.<target>.conf` is read. For example, `deploy pi2` reads `.deploy.pi2.conf`; it is an error if that file does not exist.
@@ -152,7 +151,6 @@ Config files are **bash**; the script `source`s them, so:
 | `DELETE` | — | `--no-delete` | `1` | `0` keeps remote files that do not exist locally |
 | `USE_GITIGNORE` | — | — | `0` | `1` also applies the project's `.gitignore` excludes |
 | `EXCLUDES` | — | `-e` | see below | exclude list (bash array) |
-| `SELF_UPDATE_SRC` | `DEPLOY_SELF_UPDATE_SRC` | — | empty | default source for `--self-update` |
 
 `BACKGROUND`, `DELETE`, `USE_GITIGNORE` and `EXCLUDES` have no environment variable; set them in a config file or on the command line.
 
@@ -258,18 +256,6 @@ deploy -s                               # sync only this time
   The remote script always runs under bash, so it does not matter whether the remote user's login shell is sh, dash, zsh or fish.
 
   A background program is not stopped automatically, so pair it with `STOP_CMD` to stop the old one before the next deploy.
-
-## Self-update
-
-```sh
-deploy --self-update=SRC
-```
-
-`SRC` can be an https URL, a file path, or a git repo directory containing `deploy.sh`. Without `SRC`, `SELF_UPDATE_SRC` from the config is used. If neither is set but the script itself lives in a git repo (e.g. installed via symlink), it runs `git pull` in that repo.
-
-Before replacing itself, deploy checks that the new version is a bash script with valid syntax, and backs up the old one as `<script>.bak`.
-
-A Nix/home-manager install cannot self-update; edit `deploy/deploy.sh` and switch instead.
 
 ## Tests
 
