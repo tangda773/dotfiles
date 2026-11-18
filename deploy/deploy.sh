@@ -356,6 +356,51 @@ fi
 
 command -v rsync >/dev/null || die "本機沒有安裝 rsync"
 
+# 連線前確認主機金鑰已在 known_hosts。
+# 在終端機裡 ssh 會自己問要不要信任；沒有終端機（cron、CI、agent）時 ssh 只會
+# 丟出 "Host key verification failed"，看不出原因，所以先在這裡給清楚的錯誤。
+# 查名稱的方式跟 ssh 一樣：有 HostKeyAlias 用別名，否則 HostName（非 22 埠寫成 [host]:port）。
+# 讀不到 ssh 設定、或設定不需要檢查時就不擋，交給 ssh 自己處理。
+check_host_key() {
+  local cfg k v name="" alias="" port="" strict="" f
+  local files=() more=()
+  cfg="$(ssh -G "${SSH_OPTS[@]}" "$SSH_TARGET" 2>/dev/null)" || return 0
+  while read -r k v; do
+    case "$k" in
+    hostname) name="$v" ;;
+    hostkeyalias) alias="$v" ;;
+    port) port="$v" ;;
+    stricthostkeychecking) strict="$v" ;;
+    knownhostscommand) [[ "$v" == none ]] || return 0 ;; # 金鑰來源是外部指令，查不了
+    userknownhostsfile | globalknownhostsfile)
+      read -r -a more <<<"$v"
+      files+=("${more[@]}")
+      ;;
+    esac
+  done <<<"$cfg"
+  [[ -n "$name" ]] || return 0
+  case "$strict" in false | no | off | accept-new) return 0 ;; esac
+
+  if [[ -n "$alias" && "$alias" != none ]]; then
+    name="$alias"
+  elif [[ -n "$port" && "$port" != 22 ]]; then
+    name="[$name]:$port"
+  fi
+  for f in ${files[@]+"${files[@]}"}; do
+    f="${f/#\~/$HOME}"
+    [[ -r "$f" ]] && ssh-keygen -F "$name" -f "$f" >/dev/null 2>&1 && return 0
+  done
+
+  if (: </dev/tty) 2>/dev/null; then
+    info "第一次連線到 $SSH_TARGET（known_hosts 裡沒有 $name），ssh 會要你確認主機金鑰指紋"
+    return 0
+  fi
+  die "主機 $SSH_TARGET 的金鑰不在 known_hosts（查的名稱：$name），而且沒有終端機可以讓 ssh 詢問。
+請先在終端機執行下面的指令，確認指紋後輸入 yes，再重新部署：
+  $RSYNC_SSH $SSH_TARGET true"
+}
+check_host_key
+
 # ---------- 1. 本機建置 ----------
 if [[ -n "$BUILD_CMD" ]] && ! ((DRY_RUN)); then
   info "本機建置：$BUILD_CMD"

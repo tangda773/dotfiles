@@ -25,9 +25,14 @@ trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin"
 cat >"$WORK/bin/ssh" <<'EOF'
 #!/usr/bin/env bash
+G=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
   -o | -p | -i | -l) shift 2 ;;
+  -G)
+    G=1
+    shift
+    ;;
   -*) shift ;;
   *)
     shift # 主機名稱
@@ -35,6 +40,11 @@ while [[ $# -gt 0 ]]; do
     ;;
   esac
 done
+# ssh -G：印出 $FAKE_SSH_G 檔案的內容當作設定；沒設就不印（deploy 會略過金鑰檢查）
+if ((G)); then
+  [[ -n "${FAKE_SSH_G:-}" ]] && cat "$FAKE_SSH_G"
+  exit 0
+fi
 export HOME="$FAKE_REMOTE_HOME"
 cd "$HOME" || exit 255
 exec "${FAKE_SHELL:-bash}" -c "$*"
@@ -238,6 +248,67 @@ for FAKE_SHELL in $SHELLS; do
   [[ $RC == 0 ]] && has ran
   check "13 EXCLUDES=() 空陣列" $? "rc=$RC"
 done
+
+# ---------- 主機金鑰檢查（跟遠端 shell 無關，只跑一次）----------
+# 用 setsid 讓 deploy 沒有控制終端機（模擬 cron / CI / agent）
+if command -v setsid >/dev/null && command -v ssh-keygen >/dev/null; then
+  export FAKE_SHELL=bash
+  echo "== 主機金鑰檢查"
+  ssh-keygen -q -t ed25519 -N '' -f "$WORK/hostkey"
+  KH="$WORK/known_hosts"
+  printf 'fakehost %s\n10.0.0.9 %s\n' "$(cut -d' ' -f1,2 "$WORK/hostkey.pub")" \
+    "$(cut -d' ' -f1,2 "$WORK/hostkey.pub")" >"$KH"
+  export FAKE_SSH_G="$WORK/ssh-G"
+  ssh_g() { # ssh_g hostname [其他 ssh -G 行...]
+    printf 'hostname %s\nport 22\nstricthostkeychecking ask\n' "$1" >"$FAKE_SSH_G"
+    printf 'userknownhostsfile %s\nglobalknownhostsfile %s\n' "$KH" "$WORK/none" >>"$FAKE_SSH_G"
+    shift
+    if (($#)); then printf '%s\n' "$@" >>"$FAKE_SSH_G"; fi
+  }
+  run_notty() { # 在沒有終端機的情況下跑 deploy
+    OUT="$(cd "$PROJ" && env -u DEPLOY_HOST XDG_CONFIG_HOME="$WORK/xdg" \
+      setsid -w "${DEPLOY_BASH_CMD[@]}" "$DEPLOY" 2>&1 </dev/null)"
+    RC=$?
+  }
+
+  setup 14a
+  conf RUN_CMD 'echo ran'
+  ssh_g fakehost
+  run_notty
+  [[ $RC == 0 ]] && has ran
+  check "14a 已知主機 → 正常部署" $? "rc=$RC"
+
+  setup 14b
+  conf RUN_CMD 'echo ran'
+  ssh_g unknownhost
+  run_notty
+  [[ $RC != 0 && ! -e "$REMOTE_HOME/app" ]] && grep -qF '金鑰不在 known_hosts' <<<"$OUT"
+  check "14b 未知主機、沒終端機 → 不連線並說明原因" $? "rc=$RC"
+
+  setup 14c
+  conf RUN_CMD 'echo ran'
+  ssh_g 10.0.0.9 'hostkeyalias myalias'
+  run_notty
+  [[ $RC != 0 ]] && grep -qF '查的名稱：myalias' <<<"$OUT"
+  check "14c HostKeyAlias 用別名查（IP 已知也不算）" $? "rc=$RC"
+
+  setup 14d
+  conf RUN_CMD 'echo ran'
+  ssh_g 10.0.0.9 'port 2222'
+  run_notty
+  [[ $RC != 0 ]] && grep -qF '查的名稱：[10.0.0.9]:2222' <<<"$OUT"
+  check "14d 非 22 埠用 [host]:port 查" $? "rc=$RC"
+
+  setup 14e
+  conf RUN_CMD 'echo ran'
+  ssh_g unknownhost 'stricthostkeychecking accept-new'
+  run_notty
+  [[ $RC == 0 ]] && has ran
+  check "14e StrictHostKeyChecking=accept-new → 不擋" $? "rc=$RC"
+  unset FAKE_SSH_G
+else
+  echo "== 略過主機金鑰檢查測試（沒有 setsid 或 ssh-keygen）"
+fi
 
 echo
 echo "通過 $PASS，失敗 $FAIL"

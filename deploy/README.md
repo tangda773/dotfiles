@@ -49,6 +49,21 @@ deploy            # 同步並執行
 
 `deploy` 以**目前所在的資料夾**作為專案目錄，所以要在專案根目錄執行。
 
+### 第一次連線到新主機
+
+連線前 `deploy` 會先確認主機金鑰已經在 `known_hosts`。查的名稱跟 ssh 一樣：有設 `HostKeyAlias` 就用別名，否則用 HostName，非 22 埠寫成 `[host]:port`。所以即使 IP 已經信任過，換一個別名還是算新主機。
+
+- **在終端機裡**：提示「第一次連線」，接著 ssh 會問要不要信任這個指紋，確認後輸入 `yes` 即可。
+- **沒有終端機**（cron、CI、agent）：直接停止，不會同步，並印出要先手動執行的指令，例如：
+
+  ```
+  deploy: 主機 space-a 的金鑰不在 known_hosts（查的名稱：space-a），而且沒有終端機可以讓 ssh 詢問。
+  請先在終端機執行下面的指令，確認指紋後輸入 yes，再重新部署：
+    ssh -o ConnectTimeout=10 space-a true
+  ```
+
+`StrictHostKeyChecking` 設成 `no` 或 `accept-new`、或用了 `KnownHostsCommand` 時，不做這個檢查。
+
 同步時每個變動的檔案印一行，最後印摘要：
 
 ```
