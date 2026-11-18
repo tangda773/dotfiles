@@ -40,7 +40,7 @@ die() {
   echo "deploy: $*" >&2
   exit 1
 }
-# Help text comes from the header comment (found by marker, so line numbers may change when packaged by nix)
+# Help text comes from the header comment (found by marker, not by line number)
 usage() { awk '/^# deploy — /{f=1} f && !/^#/{exit} f{sub(/^# ?/, ""); print}' "${BASH_SOURCE[0]}"; }
 info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
