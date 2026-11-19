@@ -13,6 +13,7 @@
 
 # shellcheck disable=SC2016 # test data is single-quoted on purpose; $vars must reach the remote verbatim
 # shellcheck disable=SC2088 # ~ is written verbatim into the config, for the remote to expand
+# shellcheck disable=SC2319 # each case tests on one line, then passes that test's $? to check
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,6 +34,10 @@ while [[ $# -gt 0 ]]; do
     G=1
     shift
     ;;
+  -t)
+    [[ -n "${FAKE_REMOTE_HOME:-}" ]] && echo t >>"$FAKE_REMOTE_HOME/.ssh-tty"
+    shift
+    ;;
   -*) shift ;;
   *)
     shift # host name
@@ -50,6 +55,19 @@ cd "$HOME" || exit 255
 exec "${FAKE_SHELL:-bash}" -c "$*"
 EOF
 chmod +x "$WORK/bin/ssh"
+
+# fake sudo: with FAKE_SUDO_OK=1 it runs the command (and -n -l passes); otherwise it wants a password
+cat >"$WORK/bin/sudo" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${FAKE_SUDO_OK:-0}" == 1 ]]; then
+  [[ "$1" == -n ]] && shift
+  [[ "$1" == -l ]] && exit 0
+  exec "$@"
+fi
+echo "sudo: a password is required" >&2
+exit 1
+EOF
+chmod +x "$WORK/bin/sudo"
 export PATH="$WORK/bin:$PATH"
 
 if [[ -z "${SHELLS:-}" ]]; then
@@ -248,6 +266,84 @@ for FAKE_SHELL in $SHELLS; do
   [[ $RC == 0 ]] && has ran
   check "13 EXCLUDES=() empty array" $? "rc=$RC"
 done
+
+# ---------- dry run, --no-build, stop warning, -B sudo check (independent of the remote shell; runs once) ----------
+export FAKE_SHELL=bash
+echo "== dry run, --no-build, stop, background sudo"
+run_nostdin() { # run deploy with stdin not a terminal, as in CI
+  OUT="$(cd "$PROJ" && env -u DEPLOY_HOST XDG_CONFIG_HOME="$WORK/xdg" \
+    "${DEPLOY_BASH_CMD[@]}" "$DEPLOY" 2>&1 </dev/null)"
+  RC=$?
+}
+
+setup 15a
+conf BUILD_CMD 'touch BUILT'
+run_deploy -n
+[[ $RC == 0 && ! -e "$REMOTE_HOME/app" && ! -e "$PROJ/BUILT" ]] && grep -qF 'dry run skips the local build' <<<"$OUT"
+check "15a dry run: no remote mkdir, no build, says the build was skipped" $? "rc=$RC"
+
+setup 15b
+printf 'REMOTE_DIR=%q\n' '~/deep/nested/app' >>"$PROJ/.deploy.conf"
+run_deploy -n
+[[ $RC == 0 && ! -e "$REMOTE_HOME/deep" ]] && grep -qF '1 new' <<<"$OUT" && ! grep -qF 'dry run skips' <<<"$OUT"
+check "15b dry run: missing nested remote dir still previews; no build notice without BUILD_CMD" $? "rc=$RC"
+
+setup 16a
+conf BUILD_CMD 'touch BUILT'
+conf RUN_CMD 'echo ran'
+run_deploy --no-build
+[[ $RC == 0 && ! -e "$PROJ/BUILT" ]] && has ran
+check "16a --no-build skips BUILD_CMD from the config" $? "rc=$RC"
+
+setup 16b
+run_deploy -b 'touch BUILT' --no-build -s
+[[ $RC == 0 && ! -e "$PROJ/BUILT" ]]
+check "16b -b X --no-build: the later option wins (no build)" $? "rc=$RC"
+
+setup 16c
+run_deploy --no-build -b 'touch BUILT' -s
+[[ $RC == 0 && -e "$PROJ/BUILT" ]]
+check "16c --no-build -b X: the later option wins (builds)" $? "rc=$RC"
+
+setup 17a
+conf STOP_CMD 'exit 7'
+conf RUN_CMD 'echo ran'
+run_deploy
+[[ $RC == 0 ]] && has ran && grep -qF 'warning: stop command failed (exit 7), continuing' <<<"$OUT"
+check "17a STOP fails: warning with its exit code, RUN still runs" $? "rc=$RC"
+
+setup 17b
+conf STOP_CMD 'true'
+conf RUN_CMD 'echo ran'
+run_nostdin
+[[ $RC == 0 ]] && has ran && ! grep -qF warning <<<"$OUT" && [[ "$(cat "$REMOTE_HOME/.ssh-tty" 2>/dev/null)" == t ]]
+check "17b STOP succeeds: no warning; without a terminal only RUN asks for a tty" $? "rc=$RC tty=$(tr '\n' , <"$REMOTE_HOME/.ssh-tty" 2>/dev/null)"
+
+setup 18a
+conf STOP_CMD 'touch STOPPED'
+conf BUILD_CMD 'touch BUILT'
+conf RUN_CMD $'set -e\nsudo touch RAN'
+run_deploy -B
+[[ $RC != 0 && ! -e "$PROJ/BUILT" && ! -e "$REMOTE_HOME/app" ]] && grep -qF 'background mode (-B) has no terminal' <<<"$OUT"
+check "18a -B, sudo needs a password: stops before build, sync and STOP" $? "rc=$RC"
+
+setup 18b
+conf RUN_CMD 'sudo touch RAN'
+FAKE_SUDO_OK=1 run_deploy -B
+[[ $RC == 0 ]] && wait_file "$REMOTE_HOME/app/RAN"
+check "18b -B, passwordless sudo: runs in the background" $? "rc=$RC"
+
+setup 18c
+conf RUN_CMD 'sudo touch RAN'
+run_deploy -B -s
+[[ $RC == 0 ]]
+check "18c -B -s: sync only, no sudo check" $? "rc=$RC"
+
+setup 18d
+conf RUN_CMD 'echo nosudo'
+run_deploy -B
+[[ $RC == 0 ]]
+check "18d -B: 'sudo' inside another word does not trigger the check" $? "rc=$RC"
 
 # ---------- host key check (independent of the remote shell; runs once) ----------
 # setsid leaves deploy without a controlling terminal (simulating cron / CI / an agent)

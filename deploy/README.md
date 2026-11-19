@@ -6,7 +6,7 @@ The flow:
 
 1. **Local build** (optional): run `BUILD_CMD` locally before syncing, e.g. to cross-compile.
 2. **Sync**: rsync the project to the remote directory. By default, remote files that do not exist locally are deleted.
-3. **Stop the old process** (optional): run `STOP_CMD` on the remote; a failure does not abort the deploy.
+3. **Stop the old process** (optional): run `STOP_CMD` on the remote; a failure prints a warning but does not abort the deploy.
 4. **Run** (optional): run `RUN_CMD` in the remote directory, in the foreground or background.
 
 Without `RUN_CMD`, deploy only syncs.
@@ -99,12 +99,13 @@ deploy [options] [target]
 | `-i, --key FILE` | SSH private key |
 | `-d, --dir DIR` | remote directory, default `~/<project dir name>` |
 | `-b, --build CMD` | run locally **before** syncing |
+| `--no-build` | skip the local build and use what is already built |
 | `-c, --cmd CMD` | run remotely **after** syncing |
 | `-S, --stop CMD` | stop command run remotely before `CMD` |
 | `-e, --exclude PATTERN` | extra exclude pattern; can be repeated |
 | `-B, --background` | run in the background; output goes to `deploy.log` on the remote |
 | `-s, --sync-only` | sync only, do not run |
-| `-n, --dry-run` | only list what would change; no local build, no run |
+| `-n, --dry-run` | only list what would change; changes nothing on the remote and skips the local build, so files the build would produce may show as deleted |
 | `--no-delete` | keep remote files that do not exist locally |
 | `--show` | print the final settings and exit without connecting |
 | `-h, --help` | show help |
@@ -146,7 +147,7 @@ Config files are **bash**; the script `source`s them, so:
 | `REMOTE_DIR` | `DEPLOY_DIR` | `-d` | `~/<project dir name>` | remote directory; a leading `~` is expanded on the remote |
 | `BUILD_CMD` | `DEPLOY_BUILD` | `-b` | empty | run in the local project directory before syncing |
 | `RUN_CMD` | `DEPLOY_CMD` | `-c` | empty | run in the remote directory after syncing; when empty, only sync |
-| `STOP_CMD` | `DEPLOY_STOP` | `-S` | empty | run in the remote directory before `RUN_CMD`; failures are ignored |
+| `STOP_CMD` | `DEPLOY_STOP` | `-S` | empty | run in the remote directory before `RUN_CMD`; a failure prints a warning and the deploy continues |
 | `BACKGROUND` | — | `-B` | `0` | `1` runs in the background |
 | `DELETE` | — | `--no-delete` | `1` | `0` keeps remote files that do not exist locally |
 | `USE_GITIGNORE` | — | — | `0` | `1` also applies the project's `.gitignore` excludes |
@@ -246,7 +247,7 @@ deploy -s                               # sync only this time
 
 ## Foreground and background runs
 
-- **Foreground** (default): runs via `ssh -t`, so output shows in your terminal and Ctrl+C also stops the remote program.
+- **Foreground** (default): runs via `ssh -t`, so output shows in your terminal and Ctrl+C also stops the remote program. `STOP_CMD` also gets a tty when deploy runs in a terminal, so `sudo` in either can ask for a password.
 - **Background** (`-B` or `BACKGROUND=1`): runs under `nohup` on the remote, writes output to `<REMOTE_DIR>/deploy.log`, and prints the PID. To follow the output:
 
   ```sh
@@ -256,6 +257,8 @@ deploy -s                               # sync only this time
   The remote script always runs under bash, so it does not matter whether the remote user's login shell is sh, dash, zsh or fish.
 
   A background program is not stopped automatically, so pair it with `STOP_CMD` to stop the old one before the next deploy.
+
+  A background run has no terminal, so `sudo` in it cannot ask for a password. If `RUN_CMD` uses `sudo`, deploy first checks that sudo works without a password on the remote (`sudo -n -l`) and stops before building if it does not; allow the commands with `NOPASSWD` in the remote sudoers, or run in the foreground.
 
 ## Tests
 

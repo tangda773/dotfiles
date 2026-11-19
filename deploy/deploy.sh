@@ -17,12 +17,15 @@
 #   -i, --key FILE         SSH private key
 #   -d, --dir DIR          remote directory (default ~/<project dir name>)
 #   -b, --build CMD        run locally BEFORE syncing (e.g. cross-compile)
+#       --no-build         skip the local build (use what is already built)
 #   -c, --cmd CMD          run remotely AFTER syncing (e.g. make && ./app)
 #   -S, --stop CMD         run remotely before CMD to stop the old process
 #   -e, --exclude PATTERN  extra exclude pattern (repeatable)
 #   -B, --background       run CMD in the background, output to deploy.log
+#                          (no terminal: sudo in CMD needs NOPASSWD on the remote)
 #   -s, --sync-only        sync only, do not run CMD
-#   -n, --dry-run          only list the files that would change
+#   -n, --dry-run          only list the files that would change (skips the local build,
+#                          so files it would produce may show as missing or deleted)
 #       --no-delete        keep remote files that do not exist locally
 #       --show             print the final settings and exit
 #   -h, --help             show this help
@@ -146,6 +149,10 @@ while [[ $# -gt 0 ]]; do
     need "$@"
     STOP_CMD="$2"
     shift 2
+    ;;
+  --no-build)
+    BUILD_CMD=""
+    shift
     ;;
   -e | --exclude)
     need "$@"
@@ -329,6 +336,16 @@ Run this in a terminal first, verify the fingerprint and type yes, then deploy a
 }
 check_host_key
 
+# Background mode has no terminal, so sudo cannot ask for a password there and the run would
+# fail out of sight in deploy.log. If CMD uses sudo, check before building or stopping anything.
+# `sudo -n -l` passes when sudo works for this user without a password (at least for some commands).
+sudo_word='(^|[^[:alnum:]_-])sudo([^[:alnum:]_-]|$)'
+if ((BACKGROUND)) && ! ((SYNC_ONLY)) && [[ "$RUN_CMD" =~ $sudo_word ]]; then
+  remote_bash "sudo -n -l >/dev/null 2>&1" ||
+    die "CMD uses sudo, but sudo on $SSH_TARGET needs a password and background mode (-B) has no terminal to ask for it.
+Run without -B, or allow these commands without a password (NOPASSWD) in the remote sudoers."
+fi
+
 # ---------- 1. local build ----------
 if [[ -n "$BUILD_CMD" ]] && ! ((DRY_RUN)); then
   info "local build: $BUILD_CMD"
@@ -337,7 +354,13 @@ fi
 
 # ---------- 2. sync ----------
 info "syncing $PROJECT_DIR/ → $SSH_TARGET:$REMOTE_DIR/"
-remote_bash "mkdir -p $RDIR"
+if ((DRY_RUN)); then
+  # Change nothing on the remote; rsync only reports what it would create
+  [[ -n "$BUILD_CMD" ]] &&
+    info "dry run skips the local build: files it would produce may show as '- delete' or be missing below"
+else
+  remote_bash "mkdir -p $RDIR"
+fi
 rsync "${RSYNC_ARGS[@]}" "$PROJECT_DIR/" "$SSH_TARGET:$REMOTE_DIR/" | print_changes
 
 if ((DRY_RUN)); then
@@ -352,11 +375,13 @@ fi
 if [[ -n "$STOP_CMD" ]]; then
   info "stopping old process: $STOP_CMD"
   # Wrap the user command in newlines (a trailing comment, ; or & cannot break the syntax)
-  # and run it in a subshell, so an exit or failure inside does not abort the deploy
-  remote_bash "cd $RDIR || exit 1
+  # and run it in a subshell, so an exit or failure inside does not abort the deploy, but say so.
+  # With a local terminal, allocate a tty so sudo can ask for a password (it reads /dev/tty, not stdin).
+  stop_script="cd $RDIR || exit 1
 (
 $STOP_CMD
-) </dev/null || true"
+) </dev/null || echo \"deploy: warning: stop command failed (exit \$?), continuing\" >&2"
+  if [[ -t 0 ]]; then remote_bash -t "$stop_script"; else remote_bash "$stop_script"; fi
 fi
 
 # ---------- 4. run ----------
